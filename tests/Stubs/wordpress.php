@@ -107,7 +107,7 @@ function apply_filters( string $hook, $value, ...$args ) {
 function do_action_ref_array( string $hook, array $args ): void {
 	WpState::$fired[] = array( $hook, $args );
 	foreach ( WpState::$actions[ $hook ] ?? array() as $callback ) {
-		$callback( ...$args );
+		call_user_func_array( $callback, array_values( $args ) ); // Like WordPress on PHP 7.4, string keys are not unpacked as names.
 	}
 }
 
