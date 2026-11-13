@@ -1,0 +1,67 @@
+{
+    "name": "saizul/wp-cron-doctor",
+    "description": "WP-CLI package and small admin page that diagnose WP-Cron and Action Scheduler problems: overdue, duplicate and orphaned events, loopback and system cron checks, with exit codes for monitoring.",
+    "type": "wp-cli-package",
+    "license": "MIT",
+    "keywords": ["wp-cli", "wp-cron", "cron", "action-scheduler", "woocommerce", "wordpress", "monitoring", "diagnostics"],
+    "homepage": "https://github.com/saizul/wp-cron-doctor",
+    "authors": [
+        {
+            "name": "Saizul Amin",
+            "homepage": "https://saizul.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/saizul/wp-cron-doctor/issues",
+        "source": "https://github.com/saizul/wp-cron-doctor"
+    },
+    "require": {
+        "php": ">=7.4"
+    },
+    "require-dev": {
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+        "phpcompatibility/phpcompatibility-wp": "^2.1",
+        "phpunit/phpunit": "^9.6",
+        "squizlabs/php_codesniffer": "^3.9",
+        "wp-coding-standards/wpcs": "^3.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Saizul\\CronDoctor\\WP\\": "includes/",
+            "Saizul\\CronDoctor\\": "src/"
+        },
+        "files": [
+            "command.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Saizul\\CronDoctor\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "commands": [
+            "cron-doctor report",
+            "cron-doctor dedupe",
+            "cron-doctor clean-orphans",
+            "cron-doctor run-overdue",
+            "cron-doctor system-cron"
+        ]
+    },
+    "scripts": {
+        "test": "phpunit",
+        "lint": "find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l",
+        "phpcs": "phpcs",
+        "phpcbf": "phpcbf"
+    },
+    "config": {
+        "sort-packages": true,
+        "platform": {
+            "php": "7.4.33"
+        },
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "minimum-stability": "stable"
+}

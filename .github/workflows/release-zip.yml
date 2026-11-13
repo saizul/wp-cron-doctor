@@ -1,0 +1,86 @@
+name: Release zip
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  SLUG: wp-cron-doctor
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          coverage: none
+
+      - name: Check the version matches the tag
+        if: github.event_name == 'release'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          header=$(sed -n 's/^ \* Version: *//p' "$SLUG.php" | tr -d '[:space:]')
+          constant=$(sed -n "s/^define( 'WP_CRON_DOCTOR_VERSION', '\(.*\)' );/\1/p" "$SLUG.php")
+          plugin=$(sed -n "s/.*const VERSION = '\(.*\)';/\1/p" includes/Plugin.php)
+          changelog=$(grep -m1 -o '^## \[[0-9][^]]*\]' CHANGELOG.md | tr -d '#[] ')
+          echo "tag=$tag header=$header constant=$constant plugin=$plugin changelog=$changelog"
+          test "$tag" = "$header"
+          test "$tag" = "$constant"
+          test "$tag" = "$plugin"
+          test "$tag" = "$changelog"
+
+      - name: Build the plugin folder
+        run: |
+          mkdir -p "build/$SLUG"
+          rsync -a --exclude-from=.distignore ./ "build/$SLUG/"
+          # The plugin has no runtime Composer dependencies; its own autoloader is used.
+          test ! -e "build/$SLUG/vendor"
+          test ! -e "build/$SLUG/tests"
+          find "build/$SLUG" -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
+          find "build/$SLUG" -type f | sort
+
+      - name: Smoke test the autoloader and the pure core
+        run: |
+          php -r '
+            spl_autoload_register(function ($c) {
+              $p = ["Saizul\\CronDoctor\\WP\\" => "build/wp-cron-doctor/includes/", "Saizul\\CronDoctor\\" => "build/wp-cron-doctor/src/"];
+              foreach ($p as $prefix => $dir) {
+                if (strpos($c, $prefix) === 0) { require $dir . str_replace("\\", "/", substr($c, strlen($prefix))) . ".php"; return; }
+              }
+            });
+            $now  = 1700000000;
+            $cron = [ $now - 7200 => [ "h" => [ md5(serialize([])) => [ "schedule" => false, "args" => [] ] ] ], "version" => 2 ];
+            $snap = Saizul\CronDoctor\Snapshot::from_array([ "now" => $now, "cron" => $cron ]);
+            $report = (new Saizul\CronDoctor\Doctor())->diagnose($snap);
+            $ok = $report->get("overdue")->severity() === "critical"
+              && Saizul\CronDoctor\Support\Duration::parse("1h30m") === 5400;
+            exit($ok ? 0 : 1);
+          '
+
+      - name: Create the zip
+        run: |
+          cd build
+          zip -r -q "../$SLUG.zip" "$SLUG"
+          cd ..
+          unzip -l "$SLUG.zip" | tail -n 1
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.SLUG }}
+          path: ${{ env.SLUG }}.zip
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "$SLUG.zip" --clobber
