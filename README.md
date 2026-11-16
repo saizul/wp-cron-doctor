@@ -68,6 +68,8 @@ Overall: CRITICAL (3 critical, 5 warning, 1 info, 6 ok). Details: wp cron-doctor
 - **Monitoring friendly**: table, JSON, CSV, YAML, count or a Nagios/Icinga status
   line with performance data; exit codes `0` ok, `1` warning, `2` critical, `3`
   unknown.
+- **Baselines**: accept the problems a site has today (`baseline save`) and let
+  `report --baseline` alert only when something new breaks or gets worse.
 - **Plugin mode** (optional): a read-only **Tools > Cron Doctor** page and a
   heartbeat recorded on every real cron request.
 - **Pure core**: every check works on plain data (the cron array and Action
@@ -142,6 +144,7 @@ also include `value`, `advice` and `details` (the detail rows).
 | `--loopback-timeout=<s>` | `10` | Timeout of the loopback request. |
 | `--skip-action-scheduler` | | Do not query the Action Scheduler tables. |
 | `--ignore-hook=<hooks>` | | Hooks (comma separated, `*` allowed) never reported as orphans. |
+| `--baseline=<file>` | | Apply a baseline file written by `wp cron-doctor baseline save` (see below). |
 | `--cron-context` | | Load WordPress as a cron request (`DOING_CRON`) so callbacks that plugins attach only during cron runs are seen. Package mode only. |
 
 Thresholds (durations accept `90`, `45s`, `15m`, `2h`, `1d`, `1w`, `1h30m`; sizes
@@ -170,6 +173,43 @@ accept `512`, `256K`, `1M`, `1.5MB`):
 Checks (`--check` values): `runner`, `alternate-cron`, `cron-lock`, `loopback`,
 `overdue`, `duplicates`, `orphans`, `frequent`, `unknown-schedules`, `option-size`,
 `integrity`, `action-scheduler`, `as-past-due`, `as-failed`, `as-stuck`.
+
+### `wp cron-doctor baseline`
+
+```bash
+wp cron-doctor baseline save <file> [--check=<checks>] [--expires=<duration>] [report options]
+wp cron-doctor baseline show <file> [--format=<format>]
+```
+
+Many sites have problems nobody will fix soon: orphaned events left by a removed
+plugin, a theme that schedules a job every minute. A monitor that is always red is
+ignored, so `save` records the current warnings and critical findings in a JSON
+file, and `report --baseline=<file>` shows them as `info` with the summary prefixed
+`Accepted by baseline:`. They no longer change the exit code or the Nagios status.
+
+A recorded finding still fails the report when:
+
+- its severity got worse (a warning that is now critical: `(worse than baseline: was warning)`);
+- it lists detail rows the baseline does not know, identified by hook, arguments or
+  problem text, e.g. a new orphaned hook or a new failing Action Scheduler hook
+  (`(new since baseline: hook_a, hook_b)`);
+- the baseline has expired (`--expires=30d`); the report then says so and applies nothing.
+
+Checks that were not problems when the baseline was saved are never accepted. When
+an accepted check is fine again, the table output lists it under "Fixed since the
+baseline" so the file can be saved again. Counts, run times and lateness are not
+compared, so a known orphan with more events is still accepted.
+
+| Option | Description |
+| --- | --- |
+| `--check=<checks>` | Only accept these comma separated checks, e.g. `orphans,frequent`. |
+| `--expires=<duration>` | Stop applying the baseline after this long, e.g. `7d`. |
+| `--skip-loopback`, `--skip-action-scheduler`, `--ignore-hook`, thresholds | As for `report`; use the same values in the report that reads the file. |
+| `--format=<format>` | Output of `show`: `table`, `json`, `csv`, `yaml` or `count`. |
+
+The file holds check names, severities, the main metric and hook names with their
+arguments; it is safe to commit next to your monitoring config. Invalid or missing
+files give exit code `3`.
 
 ### `wp cron-doctor dedupe`
 
@@ -243,6 +283,14 @@ Use it as an Icinga/Nagios check over SSH, or in any shell based monitor:
 ```bash
 wp cron-doctor report --problems --format=json --fail-on=critical > /tmp/cron.json \
   || mail -s "WP-Cron is broken on $(hostname)" ops@example.com < /tmp/cron.json
+```
+
+**Alert only on new problems**
+
+```bash
+wp cron-doctor baseline save /etc/wp-cron-doctor/example.json --skip-loopback --expires=30d
+wp cron-doctor report --format=nagios --skip-loopback --baseline=/etc/wp-cron-doctor/example.json
+# CRON OK - all checks passed | runner=120 overdue=0 duplicates=0 orphans=3 frequent=0 ...
 ```
 
 **Replacing visit-based cron**
