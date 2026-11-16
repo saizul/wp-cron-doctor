@@ -42,6 +42,7 @@
     "extra": {
         "commands": [
             "cron-doctor report",
+            "cron-doctor baseline",
             "cron-doctor dedupe",
             "cron-doctor clean-orphans",
             "cron-doctor run-overdue",

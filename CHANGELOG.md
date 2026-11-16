@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `wp cron-doctor baseline save|show <file>`: record the current warnings and
+  critical findings in a JSON file, optionally for some checks only (`--check`) or
+  for a limited time (`--expires`).
+- `wp cron-doctor report --baseline=<file>`: findings recorded in the baseline are
+  reported as `info` and no longer change the exit code or Nagios status, unless
+  they got worse or list new hooks; checks fixed since the baseline are listed.
+
 ## [0.1.0] - 2026-11-13
 
 ### Added

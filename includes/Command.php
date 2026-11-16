@@ -14,6 +14,7 @@ use Saizul\CronDoctor\Doctor;
 use Saizul\CronDoctor\Fixer\DuplicatePlanner;
 use Saizul\CronDoctor\Fixer\OrphanPlanner;
 use Saizul\CronDoctor\Fixer\OverdueSelector;
+use Saizul\CronDoctor\Report\Baseline;
 use Saizul\CronDoctor\Report\Report;
 use Saizul\CronDoctor\Report\Severity;
 use Saizul\CronDoctor\Report\Thresholds;
@@ -39,6 +40,10 @@ use WP_CLI;
  *     # Remove duplicate events (preview first).
  *     $ wp cron-doctor dedupe
  *     $ wp cron-doctor dedupe --yes
+ *
+ *     # Accept today's known problems, then alert only on new ones.
+ *     $ wp cron-doctor baseline save cron-baseline.json
+ *     $ wp cron-doctor report --format=nagios --baseline=cron-baseline.json
  *
  *     # Print a crontab line and systemd timer for this site.
  *     $ wp cron-doctor system-cron
@@ -111,6 +116,9 @@ class Command {
 	 *   - critical
 	 *   - never
 	 * ---
+	 *
+	 * [--baseline=<file>]
+	 * : Baseline file written by `wp cron-doctor baseline save`. Problems recorded there are shown as info and no longer change the exit code, unless they got worse or list new hooks.
 	 *
 	 * [--skip-loopback]
 	 * : Do not send the loopback request.
@@ -187,6 +195,7 @@ class Command {
 	 *     $ wp cron-doctor report --check=overdue
 	 *     $ wp cron-doctor report --format=json --fail-on=critical
 	 *     $ wp cron-doctor report --overdue-warning=30m --skip-loopback
+	 *     $ wp cron-doctor report --baseline=cron-baseline.json
 	 *
 	 * @param string[]             $args       Positional arguments.
 	 * @param array<string, mixed> $assoc_args Options.
@@ -200,23 +209,26 @@ class Command {
 
 		try {
 			$thresholds = $this->validate_report_options( $assoc_args, $format, $fail_on, $check );
+			$baseline   = isset( $assoc_args['baseline'] ) ? $this->load_baseline( (string) $assoc_args['baseline'] ) : null;
 		} catch ( InvalidArgumentException $e ) {
 			$this->unknown( $e->getMessage() );
 			return;
 		}
 
-		$snapshot = $this->factory->create(
-			$thresholds,
-			array(
-				'loopback'         => empty( $assoc_args['skip-loopback'] ),
-				'loopback_timeout' => (int) ( $assoc_args['loopback-timeout'] ?? 10 ),
-				'action_scheduler' => empty( $assoc_args['skip-action-scheduler'] ),
-				'ignored_hooks'    => HookPattern::parse_list( $assoc_args['ignore-hook'] ?? null ),
-			)
-		);
-
-		$report = ( new Doctor() )->diagnose( $snapshot, $thresholds );
-		$code   = $report->exit_code( $fail_on );
+		$report = $this->diagnose( $thresholds, $assoc_args );
+		$notes  = array();
+		if ( null !== $baseline ) {
+			if ( $baseline->is_expired( $report->generated_at() ) ) {
+				$notes[] = sprintf( 'The baseline expired on %s and was not applied.', gmdate( 'Y-m-d H:i:s', (int) $baseline->expires_at() ) );
+			} else {
+				$resolved = $baseline->resolved( $report );
+				if ( array() !== $resolved ) {
+					$notes[] = sprintf( 'Fixed since the baseline: %s. Run `wp cron-doctor baseline save` again to drop them.', implode( ', ', $resolved ) );
+				}
+			}
+			$report = $baseline->apply( $report );
+		}
+		$code = $report->exit_code( $fail_on );
 
 		if ( 'nagios' === $format ) {
 			WP_CLI::line( $report->status_line() );
@@ -260,9 +272,211 @@ class Command {
 					$totals[ Severity::OK ]
 				)
 			);
+			foreach ( $notes as $note ) {
+				WP_CLI::log( $note );
+			}
 		}
 
 		$this->halt( $code );
+	}
+
+	/**
+	 * Saves or shows a baseline of accepted problems.
+	 *
+	 * `save` runs the report and writes its current warnings and critical findings to a
+	 * JSON file. `wp cron-doctor report --baseline=<file>` then shows those findings as
+	 * info, so a monitoring check only alerts when something new breaks: a check that
+	 * was fine fails, a warning becomes critical, or new hooks show up as orphans,
+	 * duplicates or failures. `show` lists what a baseline file accepts.
+	 *
+	 * The file stores hook names and arguments only, no option values.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <action>
+	 * : What to do.
+	 * ---
+	 * options:
+	 *   - save
+	 *   - show
+	 * ---
+	 *
+	 * <file>
+	 * : Path of the baseline file.
+	 *
+	 * [--check=<checks>]
+	 * : With save, only accept these comma separated checks.
+	 *
+	 * [--expires=<duration>]
+	 * : With save, stop applying the baseline after this long, e.g. 7d or 12h.
+	 *
+	 * [--skip-loopback]
+	 * : With save, do not send the loopback request.
+	 *
+	 * [--skip-action-scheduler]
+	 * : With save, do not inspect Action Scheduler.
+	 *
+	 * [--ignore-hook=<hooks>]
+	 * : With save, comma separated hooks (or patterns with *) never reported as orphans.
+	 *
+	 * [--format=<format>]
+	 * : Output format of show.
+	 * ---
+	 * default: table
+	 * options:
+	 *   - table
+	 *   - json
+	 *   - csv
+	 *   - yaml
+	 *   - count
+	 * ---
+	 *
+	 * [--<threshold>=<value>]
+	 * : With save, any threshold option of `wp cron-doctor report`, e.g. --overdue-warning=30m. Use the same thresholds as the report that reads the baseline.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     $ wp cron-doctor baseline save cron-baseline.json
+	 *     $ wp cron-doctor baseline save cron-baseline.json --check=orphans,frequent --expires=30d
+	 *     $ wp cron-doctor baseline show cron-baseline.json
+	 *
+	 * @param string[]             $args       Positional arguments.
+	 * @param array<string, mixed> $assoc_args Options.
+	 * @return void
+	 * @throws InvalidArgumentException Never; invalid input is reported with exit code 3.
+	 */
+	public function baseline( array $args, array $assoc_args ): void {
+		$action = (string) ( $args[0] ?? '' );
+		$file   = (string) ( $args[1] ?? '' );
+
+		try {
+			if ( '' === $file ) {
+				throw new InvalidArgumentException( 'Missing the baseline file path.' );
+			}
+			if ( 'show' === $action ) {
+				$this->show_baseline( $this->load_baseline( $file ), (string) ( $assoc_args['format'] ?? 'table' ) );
+				return;
+			}
+			if ( 'save' !== $action ) {
+				throw new InvalidArgumentException( sprintf( 'Unknown action "%s". Use save or show.', $action ) );
+			}
+
+			$only = HookPattern::parse_list( $assoc_args['check'] ?? null );
+			foreach ( $only as $check ) {
+				if ( ! in_array( $check, Doctor::check_ids(), true ) ) {
+					throw new InvalidArgumentException( sprintf( 'Unknown check "%s". Known checks: %s.', $check, implode( ', ', Doctor::check_ids() ) ) );
+				}
+			}
+			$thresholds = Thresholds::from_options( $assoc_args );
+			$expires    = null;
+			if ( isset( $assoc_args['expires'] ) ) {
+				$ttl = Duration::parse( $assoc_args['expires'] );
+				if ( $ttl <= 0 ) {
+					throw new InvalidArgumentException( 'The --expires duration must be greater than zero.' );
+				}
+				$expires = time() + $ttl;
+			}
+		} catch ( InvalidArgumentException $e ) {
+			$this->unknown( $e->getMessage() );
+			return;
+		}
+
+		$report   = $this->diagnose( $thresholds, $assoc_args );
+		$baseline = Baseline::from_report( $report, $expires, $only );
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents, WordPress.PHP.NoSilencedErrors.Discouraged -- WP-CLI writes a local file chosen by the user; failures are reported below.
+		if ( false === @file_put_contents( $file, $baseline->to_json() ) ) {
+			$this->unknown( sprintf( 'Could not write the baseline file "%s".', $file ) );
+			return;
+		}
+
+		$accepted = $baseline->checks();
+		if ( array() === $accepted ) {
+			WP_CLI::success( sprintf( 'No problems to accept; wrote an empty baseline to %s.', $file ) );
+			return;
+		}
+		WP_CLI::success( sprintf( 'Accepted %d check(s) in %s: %s.', count( $accepted ), $file, implode( ', ', $accepted ) ) );
+	}
+
+	/**
+	 * Lists the entries of a baseline.
+	 *
+	 * @param Baseline $baseline Baseline.
+	 * @param string   $format   Output format.
+	 * @return void
+	 * @throws InvalidArgumentException For an invalid format.
+	 */
+	private function show_baseline( Baseline $baseline, string $format ): void {
+		if ( ! in_array( $format, self::FORMATS, true ) ) {
+			throw new InvalidArgumentException( sprintf( 'Invalid format "%s". Use table, json, csv, yaml or count.', $format ) );
+		}
+
+		$data = $baseline->to_array();
+		$rows = array();
+		foreach ( (array) $data['checks'] as $check => $entry ) {
+			$rows[] = array(
+				'check'    => (string) $check,
+				'severity' => $entry['severity'],
+				'value'    => null === $entry['value'] ? '' : $entry['value'],
+				'items'    => implode( ', ', $entry['items'] ),
+			);
+		}
+
+		$this->display( $format, $rows, array( 'check', 'severity', 'value', 'items' ) );
+
+		if ( 'table' === $format ) {
+			$expires = $baseline->expires_at();
+			WP_CLI::log(
+				sprintf(
+					'Created %s, %s.',
+					gmdate( 'Y-m-d H:i:s', $baseline->created_at() ),
+					null === $expires
+						? 'never expires'
+						: ( $baseline->is_expired( time() ) ? 'expired ' : 'expires ' ) . gmdate( 'Y-m-d H:i:s', $expires )
+				)
+			);
+		}
+	}
+
+	/**
+	 * Reads a baseline file.
+	 *
+	 * @param string $file Path.
+	 * @return Baseline
+	 * @throws InvalidArgumentException When the file is missing or invalid.
+	 */
+	private function load_baseline( string $file ): Baseline {
+		if ( '' === $file || ! is_file( $file ) || ! is_readable( $file ) ) {
+			throw new InvalidArgumentException( sprintf( 'Cannot read the baseline file "%s".', $file ) );
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Local file chosen by the user.
+		$json = file_get_contents( $file );
+		try {
+			return Baseline::from_json( false === $json ? '' : $json );
+		} catch ( InvalidArgumentException $e ) {
+			throw new InvalidArgumentException( sprintf( 'Invalid baseline file "%s": %s', $file, $e->getMessage() ) );
+		}
+	}
+
+	/**
+	 * Collects a snapshot and runs every check.
+	 *
+	 * @param Thresholds           $thresholds Limits.
+	 * @param array<string, mixed> $assoc_args Options.
+	 * @return Report
+	 */
+	private function diagnose( Thresholds $thresholds, array $assoc_args ): Report {
+		$snapshot = $this->factory->create(
+			$thresholds,
+			array(
+				'loopback'         => empty( $assoc_args['skip-loopback'] ),
+				'loopback_timeout' => (int) ( $assoc_args['loopback-timeout'] ?? 10 ),
+				'action_scheduler' => empty( $assoc_args['skip-action-scheduler'] ),
+				'ignored_hooks'    => HookPattern::parse_list( $assoc_args['ignore-hook'] ?? null ),
+			)
+		);
+
+		return ( new Doctor() )->diagnose( $snapshot, $thresholds );
 	}
 
 	/**
