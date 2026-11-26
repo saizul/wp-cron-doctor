@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format follows
 - `wp cron-doctor report --baseline=<file>`: findings recorded in the baseline are
   reported as `info` and no longer change the exit code or Nagios status, unless
   they got worse or list new hooks; checks fixed since the baseline are listed.
+- `wp cron-doctor dedupe --exclude-hook=<hooks>` never touches the given hooks or
+  patterns, and `--hook` now accepts `*` patterns like `clean-orphans` and
+  `run-overdue` do (previously only exact hook names matched).
 
 ## [0.1.0] - 2026-11-13
 

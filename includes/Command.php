@@ -487,7 +487,10 @@ class Command {
 	 * ## OPTIONS
 	 *
 	 * [--hook=<hooks>]
-	 * : Only these comma separated hooks.
+	 * : Only these comma separated hooks or patterns (`*` matches any characters).
+	 *
+	 * [--exclude-hook=<hooks>]
+	 * : Never touch these comma separated hooks or patterns.
 	 *
 	 * [--yes]
 	 * : Remove the events.
@@ -508,6 +511,7 @@ class Command {
 	 *
 	 *     $ wp cron-doctor dedupe
 	 *     $ wp cron-doctor dedupe --hook=woocommerce_cleanup_sessions --yes
+	 *     $ wp cron-doctor dedupe --hook='woocommerce_*' --exclude-hook=woocommerce_scheduled_sales
 	 *
 	 * @param string[]             $args       Positional arguments.
 	 * @param array<string, mixed> $assoc_args Options.
@@ -515,7 +519,11 @@ class Command {
 	 */
 	public function dedupe( array $args, array $assoc_args ): void {
 		$cron = $this->cron();
-		$plan = ( new DuplicatePlanner() )->plan( $cron, HookPattern::parse_list( $assoc_args['hook'] ?? null ) );
+		$plan = ( new DuplicatePlanner() )->plan(
+			$cron,
+			HookPattern::parse_list( $assoc_args['hook'] ?? null ),
+			HookPattern::parse_list( $assoc_args['exclude-hook'] ?? null )
+		);
 
 		$this->apply_removals( $plan, $assoc_args, 'duplicate' );
 	}

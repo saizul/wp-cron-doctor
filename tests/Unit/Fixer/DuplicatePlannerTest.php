@@ -62,6 +62,28 @@ final class DuplicatePlannerTest extends TestCase {
 		$this->assertSame( 'b', $plan[0]->hook() );
 	}
 
+	public function test_hook_patterns_and_exclusions(): void {
+		$cron = CronArray::from_option(
+			CronBuilder::create()
+				->single( 100, 'shop_sync' )
+				->single( 200, 'shop_sync' )
+				->single( 100, 'shop_cleanup' )
+				->single( 300, 'shop_cleanup' )
+				->single( 100, 'other' )
+				->single( 400, 'other' )
+				->build()
+		);
+		$planner = new DuplicatePlanner();
+		$hooks   = static fn( array $events ): array => array_map( static fn( Event $e ) => $e->hook() . '@' . $e->timestamp(), $events );
+
+		$this->assertSame( array( 'shop_sync@200', 'shop_cleanup@300' ), $hooks( $planner->plan( $cron, array( 'shop_*' ) ) ) );
+		$this->assertSame( array( 'shop_sync@200' ), $hooks( $planner->plan( $cron, array( 'shop_*' ), array( 'shop_cleanup' ) ) ) );
+		$this->assertSame( array( 'other@400' ), $hooks( $planner->plan( $cron, array(), array( 'shop_*' ) ) ) );
+		$this->assertSame( array(), $planner->plan( $cron, array( 'nothing_*' ) ) );
+		$this->assertCount( 3, $planner->groups( $cron ) );
+		$this->assertCount( 2, $planner->groups( $cron, array(), array( 'other' ) ) );
+	}
+
 	public function test_empty(): void {
 		$this->assertSame( array(), ( new DuplicatePlanner() )->plan( CronArray::from_option( array() ) ) );
 	}
