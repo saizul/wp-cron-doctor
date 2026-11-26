@@ -163,6 +163,23 @@ final class CommandTest extends WpTestCase {
 		$this->assertSame( array( 'Removed 1 duplicate event(s).' ), WP_CLI::messages( 'success' ) );
 	}
 
+	public function test_dedupe_hook_patterns_and_exclude(): void {
+		WpState::$options['cron'] = CronBuilder::create()
+			->single( 100, 'shop_sync' )->single( 200, 'shop_sync' )
+			->single( 100, 'shop_keep' )->single( 300, 'shop_keep' )
+			->single( 100, 'other' )->single( 400, 'other' )
+			->build();
+
+		$this->assertSame( 0, $this->invoke( 'dedupe', array( 'yes' => true, 'hook' => 'shop_*', 'exclude-hook' => 'shop_keep' ) ) );
+
+		$cron = CronArray::from_option( WpState::$options['cron'] );
+		$this->assertSame(
+			array( 'other@100', 'shop_keep@100', 'shop_sync@100', 'shop_keep@300', 'other@400' ),
+			array_map( static fn( $e ) => $e->hook() . '@' . $e->timestamp(), $cron->events() )
+		);
+		$this->assertSame( array( 'Removed 1 duplicate event(s).' ), WP_CLI::messages( 'success' ) );
+	}
+
 	public function test_dedupe_reports_failures(): void {
 		WpState::$options['cron']   = CronBuilder::create()->single( 100, 'a' )->single( 200, 'a' )->build();
 		WpState::$unschedule_result = false;

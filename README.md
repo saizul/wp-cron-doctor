@@ -219,7 +219,8 @@ copy that runs first. Arguments are compared exactly like WordPress does
 
 | Option | Description |
 | --- | --- |
-| `--hook=<hooks>` | Only these hooks. |
+| `--hook=<hooks>` | Only these hooks or `*` patterns, e.g. `woocommerce_*`. |
+| `--exclude-hook=<hooks>` | Never touch these hooks or patterns. |
 | `--yes` | Remove the events (otherwise dry run). |
 | `--format=<format>` | `table`, `json`, `csv`, `yaml` or `count`. |
 

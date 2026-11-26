@@ -9,6 +9,7 @@ namespace Saizul\CronDoctor\Fixer;
 
 use Saizul\CronDoctor\Cron\CronArray;
 use Saizul\CronDoctor\Cron\Event;
+use Saizul\CronDoctor\Support\HookPattern;
 
 /**
  * Groups events by hook and arguments.
@@ -26,15 +27,19 @@ final class DuplicatePlanner {
 	/**
 	 * Groups with more than one copy.
 	 *
-	 * @param CronArray $cron  Parsed cron option.
-	 * @param string[]  $hooks Only these hooks (empty = all).
+	 * @param CronArray $cron    Parsed cron option.
+	 * @param string[]  $hooks   Only these hooks or `*` patterns (empty = all).
+	 * @param string[]  $exclude Skip these hooks or `*` patterns.
 	 * @return array<int, array{keep: Event, remove: Event[]}>
 	 */
-	public function groups( CronArray $cron, array $hooks = array() ): array {
+	public function groups( CronArray $cron, array $hooks = array(), array $exclude = array() ): array {
 		$by_signature = array();
 
 		foreach ( $cron->events() as $event ) {
-			if ( array() !== $hooks && ! in_array( $event->hook(), $hooks, true ) ) {
+			if ( array() !== $hooks && ! HookPattern::matches_any( $event->hook(), $hooks ) ) {
+				continue;
+			}
+			if ( array() !== $exclude && HookPattern::matches_any( $event->hook(), $exclude ) ) {
 				continue;
 			}
 			$by_signature[ $event->signature() ][] = $event;
@@ -66,13 +71,14 @@ final class DuplicatePlanner {
 	/**
 	 * Events to remove, oldest first.
 	 *
-	 * @param CronArray $cron  Parsed cron option.
-	 * @param string[]  $hooks Only these hooks (empty = all).
+	 * @param CronArray $cron    Parsed cron option.
+	 * @param string[]  $hooks   Only these hooks or `*` patterns (empty = all).
+	 * @param string[]  $exclude Skip these hooks or `*` patterns.
 	 * @return Event[]
 	 */
-	public function plan( CronArray $cron, array $hooks = array() ): array {
+	public function plan( CronArray $cron, array $hooks = array(), array $exclude = array() ): array {
 		$remove = array();
-		foreach ( $this->groups( $cron, $hooks ) as $group ) {
+		foreach ( $this->groups( $cron, $hooks, $exclude ) as $group ) {
 			foreach ( $group['remove'] as $event ) {
 				$remove[] = $event;
 			}
